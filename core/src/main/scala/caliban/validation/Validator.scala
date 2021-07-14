@@ -101,13 +101,13 @@ object Validator {
                 op.selectionSet,
                 fragments,
                 variables,
+                op.variableDefinitions,
                 operation.opType,
                 document.sourceMapper,
                 op.directives,
                 rootType
               ),
-              op.operationType,
-              op.variableDefinitions
+              op.operationType
             )
           )
       }
@@ -530,6 +530,7 @@ object Validator {
                     op.selectionSet,
                     context.fragments,
                     Map.empty[String, InputValue],
+                    List.empty[VariableDefinition],
                     t,
                     SourceMapper.empty,
                     Nil,
@@ -666,17 +667,30 @@ object Validator {
         val objectFields    = fields(obj)
         val supertypeFields = supertype.flatMap(fields)
 
+        def isNonNullableSubtype(supertypeFieldType: __Type, objectFieldType: __Type) = {
+          import __TypeKind._
+          objectFieldType.kind match {
+            case NON_NULL => objectFieldType.ofType.exists(Types.same(supertypeFieldType, _))
+            case _        => false
+          }
+        }
+
         def isValidSubtype(supertypeFieldType: __Type, objectFieldType: __Type) = {
           val supertypePossibleTypes = supertypeFieldType.possibleTypes.toList.flatten
+
           Types.same(supertypeFieldType, objectFieldType) ||
-          supertypePossibleTypes.exists(Types.same(_, objectFieldType))
+          supertypePossibleTypes.exists(Types.same(_, objectFieldType)) ||
+          isNonNullableSubtype(supertypeFieldType, objectFieldType)
         }
 
         IO.foreach_(objectFields) { objField =>
           val fieldContext = s"Field '${objField.name}'"
 
           IO.whenCase(supertypeFields.find(_.name == objField.name)) { case Some(superField) =>
-            val extraArgs = objField.args.filterNot(superField.args.toSet)
+            val superArgs = superField.args.map(arg => (arg.name, arg)).toMap
+            val extraArgs = objField.args.filter { arg =>
+              superArgs.get(arg.name).fold(true)(superArg => !Types.same(arg.`type`(), superArg.`type`()))
+            }
 
             def fieldTypeIsValid = isValidSubtype(superField.`type`(), objField.`type`())
 
@@ -797,18 +811,21 @@ object Validator {
       .collectFirst { case (_, f :: _ :: _) => f }
       .fold[IO[ValidationError, Unit]](IO.unit)(duplicate => failValidation(messageBuilder(duplicate), explanatoryText))
 
-  private[caliban] def doesNotStartWithUnderscore(field: __Field, errorContext: String) = {
+  private[caliban] def doesNotStartWithUnderscore(field: __Field, errorContext: String): IO[ValidationError, Unit] = {
     val explanatory = s"""The field must not have a name which begins with the characters {"__"} (two underscores)"""
     doesNotStartWithUnderscore[__Field](field, _.name, errorContext, explanatory)
   }
 
-  private[caliban] def doesNotStartWithUnderscore(inputValue: __InputValue, errorContext: String) = {
+  private[caliban] def doesNotStartWithUnderscore(
+    inputValue: __InputValue,
+    errorContext: String
+  ): IO[ValidationError, Unit] = {
     val explanatory =
       s"""The input field must not have a name which begins with the characters "__" (two underscores)"""
     doesNotStartWithUnderscore[__InputValue](inputValue, _.name, errorContext, explanatory)
   }
 
-  private def doesNotStartWithUnderscore(directive: Directive, errorContext: String) = {
+  private def doesNotStartWithUnderscore(directive: Directive, errorContext: String): IO[ValidationError, Unit] = {
     val explanatory =
       s"""The directive must not have a name which begins with the characters "__" (two underscores)"""
     doesNotStartWithUnderscore[Directive](directive, _.name, errorContext, explanatory)

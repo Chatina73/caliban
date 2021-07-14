@@ -44,7 +44,7 @@ See the [Custom Types](#custom-types) section to find out how to support your ow
 If you want Caliban to support other standard types, feel free to [file an issue](https://github.com/ghostdogpr/caliban/issues) or even a PR.
 
 ::: warning Schema derivation issues
-Magnolia (the library used to derive the schema at compile-time) sometimes has some trouble generating schemas with a lot of nested types, or types reused in multiple places.
+The schema derivation sometimes has some trouble generating schemas with a lot of nested types, or types reused in multiple places.
 To deal with this, you can declare schemas for your case classes and sealed traits explicitly:
 
 ```scala
@@ -52,15 +52,17 @@ implicit val roleSchema      = Schema.gen[Role]
 implicit val characterSchema = Schema.gen[Character]
 ```
 
-Make sure those implicits are in scope when you call `graphQL(...)`. This will make Magnolia's job easier by pre-generating schemas for those classes and re-using them when needed.
+Make sure those implicits are in scope when you call `graphQL(...)`. This will make derivation's job easier by pre-generating schemas for those classes and re-using them when needed.
 This will also improve compilation times and generate less bytecode.
 
-If the derivation fails and you're not sure why, you can also call Magnolia's macro directly by using `genMacro`.
+In Scala 2, if the derivation fails and you're not sure why, you can also call Magnolia's macro directly by using `genMacro`.
 The compilation will return better error messages in case something is missing:
 
 ```scala
 implicit val characterSchema = Schema.genMacro[Character].schema
 ```
+
+In Scala 3, derivation doesn't support value classes, opaque types and nested sealed traits.
 :::
 
 ## Enums, unions, interfaces
@@ -123,6 +125,8 @@ type Mechanic {
 If you prefer an `Interface` instead of a `Union` type, add the `@GQLInterface` annotation to your sealed trait.
 An interface will be created with all the fields that are common to the case classes extending the sealed trait, as long as they return the same type.
 
+If you prefer to have a `Union` type instead of an `Enum`, even when the sealed trait contains only objects, add the `@GQLUnion` annotation.
+
 ## Arguments
 
 To declare a field that take arguments, create a dedicated case class representing the arguments and make the field a _function_ from this class to the result type.
@@ -163,6 +167,9 @@ If you require a ZIO environment, you will need to have the content of `caliban.
 object schema extends GenericSchema[MyEnv]
 import schema._
 ```
+Note: If you ever need to declare schemas explicitly (by calling `gen` directly, as explained above), and you require a ZIO environment (explained in this section), 
+then you must use the `gen` from this `object schema`. If you call `gen` to derive schemas in the same module and you `import schema._` at the top of this module, 
+you'd be fine. However, if you derive schemas in a separate module, then make sure you import this schema object in that module so that you'll be using the `gen` from the `schema` object.
 
 ## Annotations
 
@@ -212,7 +219,7 @@ implicit val localDateArgBuilder: ArgBuilder[LocalDate] = {
 }
 ```
 
-Value classes (`case class SomeWrapper(self: SomeType) extends AnyVal`) will be unwrapped by default.
+Value classes (`case class SomeWrapper(self: SomeType) extends AnyVal`) will be unwrapped by default in Scala 2 (this is not supported by Scala 3 derivation).
 
 ## Code generation
 
@@ -220,17 +227,17 @@ Caliban can automatically generate Scala code from a GraphQL schema.
 
 In order to use this feature, add the `caliban-codegen-sbt` sbt plugin to your `project/plugins.sbt` file:
 ```scala
-addSbtPlugin("com.github.ghostdogpr" % "caliban-codegen-sbt" % "0.9.5")
+addSbtPlugin("com.github.ghostdogpr" % "caliban-codegen-sbt" % "1.1.0")
 ```
 
 And enable it in your `build.sbt` file:
 ```scala
-enablePlugins(CodegenPlugin)
+enablePlugins(CalibanPlugin)
 ```
 
 Then call the `calibanGenSchema` sbt command.
 ```scala
-calibanGenSchema schemaPath outputPath [--scalafmtPath path] [--headers name:value,name2:value2] [--packageName name] [--effect fqdn.Effect] [--scalarMappings gqlType:f.q.d.n.Type,gqlType2:f.q.d.n.Type2] [--imports a.b.c._,c.d.E]
+calibanGenSchema schemaPath outputPath [--scalafmtPath path] [--headers name:value,name2:value2] [--packageName name] [--effect fqdn.Effect] [--scalarMappings gqlType:f.q.d.n.Type,gqlType2:f.q.d.n.Type2] [--imports a.b.c._,c.d.E] [--abstractEffectType true|false]
 
 calibanGenSchema project/schema.graphql src/main/MyAPI.scala
 ```
@@ -241,6 +248,8 @@ The generated code will be formatted with Scalafmt using the configuration defin
 The package of the generated code is derived from the folder of `outputPath`. This can be overridden by providing an alternative package with the `--packageName` option.
 
 By default, each Query and Mutation will be wrapped into a `zio.UIO` effect. This can be overridden by providing an alternative effect with the `--effect` option.
+
+You can also indicate that the effect type is abstract via `--abstractEffectType true`, in which case `Query` will be replaced by `Query[F[_]]` and so on (note `F` will be used unless `--effect <effect>` is explicitly given in which case `<effect>` would be used in place of `F`).
 
 If you want to force a mapping between a GraphQL type and a Scala class (such as scalars), you can use the
 `--scalarMappings` option. Also you can add additional imports by providing `--imports` option.

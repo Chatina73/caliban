@@ -110,12 +110,17 @@ object TestUtils {
 
   case class SubscriptionIO(deleteCharacters: ZStream[Any, Nothing, String])
 
+  implicit val querySchema: Schema[Any, Query]                   = Schema.gen
+  implicit val queryIOSchema: Schema[Any, QueryIO]               = Schema.gen
+  implicit val mutationIOSchema: Schema[Any, MutationIO]         = Schema.gen
+  implicit val subscriptionIOSchema: Schema[Any, SubscriptionIO] = Schema.gen
+
   val resolver                 = RootResolver(
     Query(
       args => characters.filter(c => args.origin.forall(c.origin == _)),
       args => characters.find(c => c.name == args.name),
       args => characters.filter(c => args.names.contains(c.name)),
-      args => characters.contains(args.character)
+      args => characters.exists(_.name == args.character.name)
     )
   )
   val resolverIO               = RootResolver(
@@ -300,8 +305,8 @@ object TestUtils {
             )
           )
 
-      val interfaceA = Types.makeInterface(Some("InterfaceA"), None, makeFields("a"), Nil)
-      val interfaceB = Types.makeInterface(Some("InterfaceB"), None, makeFields("b"), Nil)
+      val interfaceA = Types.makeInterface(Some("InterfaceA"), None, () => makeFields("a"), Nil)
+      val interfaceB = Types.makeInterface(Some("InterfaceB"), None, () => makeFields("b"), Nil)
 
       val objectWrongInterfaceFieldType = __Type(
         name = Some("ObjectWrongInterfaceFieldType"),
@@ -365,7 +370,7 @@ object TestUtils {
       val fieldInterface             = Types.makeInterface(
         name = Some("FieldInterface"),
         description = None,
-        fields = List(__Field("a", None, Nil, () => Types.string)),
+        fields = () => List(__Field("a", None, Nil, () => Types.string)),
         subTypes = Nil
       )
       val fieldObject                = __Type(
@@ -377,7 +382,7 @@ object TestUtils {
       val withListFieldInterface     = Types.makeInterface(
         name = Some("WithListFieldInterface"),
         description = None,
-        fields = List(__Field("a", None, Nil, () => Types.makeList(fieldInterface))),
+        fields = () => List(__Field("a", None, Nil, () => Types.makeList(fieldInterface))),
         subTypes = Nil
       )
       val objectWrongListItemSubtype = __Type(
@@ -388,21 +393,23 @@ object TestUtils {
       )
 
       @GQLInterface
-      sealed trait WithNullable {
-        val field: Task[String]
-      }
-      case class WithNonNullable(field: UIO[String]) extends WithNullable
-      case class TestNonNullableObject(nonNullable: WithNonNullable)
-      val resolverNonNullableSubtype = RootResolver(TestNonNullableObject(WithNonNullable(UIO.succeed("a"))))
+      sealed trait WithNullable {}
+
+      case class IsNullable(field: UIO[Option[String]]) extends WithNullable
+      case class IsNonNullable(field: UIO[String])      extends WithNullable
+
+      case class TestNonNullableObject(nonNullable: WithNullable)
+      val resolverNonNullableSubtype = RootResolver(TestNonNullableObject(IsNonNullable(UIO.succeed("a"))))
 
       case class FieldArg(arg: String)
       @GQLInterface
       sealed trait WithFieldWithArg {
         val fieldWithArg: FieldArg => String
       }
-      case class FieldWithArgObject(fieldWithArg: FieldArg => String) extends WithFieldWithArg
-      case class TestFieldWithArgObject(obj: FieldWithArgObject)
-      val resolverFieldWithArg = RootResolver(TestFieldWithArgObject(FieldWithArgObject(_ => "a")))
+      case class FieldWithArgObject1(fieldWithArg: FieldArg => String) extends WithFieldWithArg
+      case class FieldWithArgObject2(fieldWithArg: FieldArg => String) extends WithFieldWithArg
+      case class TestFieldWithArgObject(obj: WithFieldWithArg)
+      val resolverFieldWithArg = RootResolver(TestFieldWithArgObject(FieldWithArgObject1(_ => "a")))
 
       val nullableExtraArgsObject = __Type(
         name = Some("NullableExtraArgsObject"),
@@ -456,15 +463,16 @@ object TestUtils {
       val withNullableExtraArgs: __Type = Types.makeInterface(
         name = Some("WithNullableExtraArgs"),
         description = None,
-        fields = List(
-          __Field(
-            name = "fieldWithArg",
-            description = None,
-            `type` = () => Types.string,
-            args =
-              List(__InputValue(name = "arg", description = None, `type` = () => Types.string, defaultValue = None))
-          )
-        ),
+        fields = () =>
+          List(
+            __Field(
+              name = "fieldWithArg",
+              description = None,
+              `type` = () => Types.string,
+              args =
+                List(__InputValue(name = "arg", description = None, `type` = () => Types.string, defaultValue = None))
+            )
+          ),
         subTypes = List(nullableExtraArgsObject)
       )
     }
